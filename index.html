@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeedReader Pro</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --card: #161616;
+            --text: #ffffff;
+            --accent: #ff4757;
+            --blue: #00a8ff;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #app {
+            width: 90%;
+            max-width: 650px;
+            background: var(--card);
+            padding: 40px;
+            border-radius: 28px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+            text-align: center;
+        }
+
+        #word-display {
+            font-size: clamp(3rem, 10vw, 5.5rem);
+            font-weight: 800;
+            height: 160px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', Courier, monospace;
+            border-top: 1px solid #333;
+            border-bottom: 1px solid #333;
+            margin: 20px 0;
+            position: relative;
+        }
+
+        /* Focus Guides */
+        #word-display::before, #word-display::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            width: 2px;
+            height: 15px;
+            background: var(--accent);
+            transform: translateX(-50%);
+        }
+        #word-display::before { top: 0; }
+        #word-display::after { bottom: 0; }
+
+        .highlight { color: var(--accent); text-shadow: 0 0 15px rgba(255, 71, 87, 0.4); }
+
+        #progress-container {
+            width: 100%;
+            height: 5px;
+            background: #222;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            overflow: hidden;
+        }
+
+        #progress-bar {
+            width: 0%;
+            height: 100%;
+            background: var(--blue);
+            transition: width 0.1s linear;
+        }
+
+        textarea {
+            width: 100%;
+            height: 120px;
+            background: #1f1f1f;
+            color: #ccc;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .controls { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+        .btn {
+            padding: 12px 25px;
+            border-radius: 10px;
+            border: none;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .btn-main { background: var(--blue); color: white; }
+        .btn-ghost { background: #333; color: white; }
+        .btn-danger { background: var(--accent); color: white; }
+
+        .hidden { display: none !important; }
+
+        #loader {
+            font-size: 0.9rem;
+            color: var(--blue);
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div id="progress-container">
+        <div id="progress-bar"></div>
+    </div>
+
+    <div id="word-display">READY</div>
+
+    <div id="input-mode">
+        <textarea id="text-area" placeholder="Paste text here or upload a file..."></textarea>
+        <div class="controls">
+            <input type="file" id="file-picker" accept=".txt,.pdf" class="hidden">
+            <button class="btn btn-ghost" onclick="document.getElementById('file-picker').click()">📂 Upload File</button>
+            <button class="btn btn-main" id="start-btn">Start Reading</button>
+        </div>
+        <div id="loader" class="hidden">Parsing PDF... please wait.</div>
+    </div>
+
+    <div id="reading-mode" class="hidden">
+        <div class="controls">
+            <button class="btn btn-ghost" id="pause-btn">Pause</button>
+            <button class="btn btn-danger" id="stop-btn">Stop</button>
+            <div style="display:flex; align-items:center; margin-left:15px;">
+                <span style="font-size:0.8rem; margin-right:5px;">WPM:</span>
+                <input type="number" id="wpm-val" value="350" style="width:50px; background:#222; border:1px solid #444; color:white; padding:4px;">
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Critical for GitHub Pages: Setting the worker source
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+    let words = [];
+    let currentIndex = 0;
+    let timer = null;
+    let paused = false;
+
+    const display = document.getElementById('word-display');
+    const bar = document.getElementById('progress-bar');
+    const inputMode = document.getElementById('input-mode');
+    const readingMode = document.getElementById('reading-mode');
+    const loader = document.getElementById('loader');
+
+    // --- File Reader ---
+    document.getElementById('file-picker').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        loader.classList.remove('hidden');
+        
+        if (file.type === "application/pdf") {
+            const reader = new FileReader();
+            reader.onload = async function() {
+                const typedarray = new Uint8Array(this.result);
+                try {
+                    const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                    let text = "";
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const content = await page.getTextContent();
+                        text += content.items.map(s => s.str).join(" ") + " ";
+                    }
+                    document.getElementById('text-area').value = text;
+                } catch (err) {
+                    alert("Error reading PDF");
+                }
+                loader.classList.add('hidden');
+            };
+            reader.readAsArrayBuffer(file);
+        } else {
+            document.getElementById('text-area').value = await file.text();
+            loader.classList.add('hidden');
+        }
+    });
+
+    // --- Speed Reading Logic ---
+    function getORPIndex(word) {
+        if (word.length <= 1) return 0;
+        if (word.length <= 5) return 1;
+        if (word.length <= 9) return 2;
+        return 3;
+    }
+
+    function showWord() {
+        if (currentIndex < words.length) {
+            const word = words[currentIndex];
+            const orp = getORPIndex(word);
+            display.innerHTML = `${word.slice(0, orp)}<span class="highlight">${word[orp]}</span>${word.slice(orp + 1)}`;
+            currentIndex++;
+            bar.style.width = `${(currentIndex / words.length) * 100}%`;
+        } else {
+            reset();
+            display.innerText = "FINISHED";
+        }
+    }
+
+    function start() {
+        const rawText = document.getElementById('text-area').value;
+        words = rawText.split(/\s+/).filter(w => w.length > 0);
+        if (words.length === 0) return;
+
+        inputMode.classList.add('hidden');
+        readingMode.classList.remove('hidden');
+        
+        const wpm = document.getElementById('wpm-val').value;
+        timer = setInterval(showWord, 60000 / wpm);
+    }
+
+    function reset() {
+        clearInterval(timer);
+        timer = null;
+        currentIndex = 0;
+        inputMode.classList.remove('hidden');
+        readingMode.classList.add('hidden');
+        paused = false;
+        document.getElementById('pause-btn').innerText = "Pause";
+    }
+
+    document.getElementById('start-btn').addEventListener('click', start);
+    document.getElementById('stop-btn').addEventListener('click', reset);
+    document.getElementById('pause-btn').addEventListener('click', (e) => {
+        if (!paused) {
+            clearInterval(timer);
+            e.target.innerText = "Resume";
+            paused = true;
+        } else {
+            const wpm = document.getElementById('wpm-val').value;
+            timer = setInterval(showWord, 60000 / wpm);
+            e.target.innerText = "Pause";
+            paused = false;
+        }
+    });
+</script>
+</body>
+</html>
